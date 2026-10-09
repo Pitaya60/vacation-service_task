@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-const API = (import.meta as any).env.VITE_API ?? 'http://localhost:3001';
+const API = (import.meta as any).env.VITE_API ?? 'http://localhost:8000/api/v1';
 let tok = '';
 const call = async (p: string, m = 'GET', b?: any) => {
   const r = await fetch(API + p, { method: m, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: b ? JSON.stringify(b) : undefined });

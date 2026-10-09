@@ -1,0 +1,313 @@
+import asyncio, os, secrets, threading
+from contextlib import asynccontextmanager
+from datetime import date, timedelta
+
+import psycopg
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
+
+from . import db, rules
+from .rules import plen
+
+tokens: dict[str, int] = {}
+subs: set[asyncio.Queue] = set()
+
+
+def today() -> date:  # VAC_TODAY нужен только тестам
+    v = os.environ.get("VAC_TODAY")
+    return date.fromisoformat(v) if v else date.today()
+
+
+def note(type_: str, vid: int, rid: int | None, text: str):
+    """«Ровно одно»: unique(type, vacation_id, recipient_id) + on conflict do nothing."""
+    if not rid:
+        return
+    r = db.q("insert into notifications(type,vacation_id,recipient_id,text) values(%s,%s,%s,%s) on conflict do nothing returning id",
+             (type_, vid, rid, text))
+    if r:
+        print(f"[notify] {type_} -> user {rid}: {text}")
+
+
+def ping():
+    db.q("select pg_notify('cal','x')")
+
+
+def remind():
+    """Напоминание за REMIND_DAYS до начала сотруднику и руководителю; идемпотентно."""
+    n = int(os.environ.get("REMIND_DAYS", 3))
+    rows = db.q("""select v.id, v.user_id, u.manager_id from vacations v join users u on u.id=v.user_id
+        where v.status='approved' and (select min(start_date) from vacation_parts where vacation_id=v.id)=%s""",
+                (today() + timedelta(days=n),))
+    for r in rows:
+        for rid in (r["user_id"], r["manager_id"]):
+            note("reminder", r["id"], rid, f"Отпуск начнётся через {n} дн.")
+
+
+def _listen(loop):
+    with psycopg.connect(db.DSN, autocommit=True) as c:
+        c.execute("listen cal")
+        for _ in c.notifies():
+            loop.call_soon_threadsafe(lambda: [s.put_nowait("cal") for s in list(subs)])
+
+
+async def _reminders():
+    while True:
+        try:
+            await asyncio.to_thread(remind)
+        except Exception as e:
+            print("remind error", e)
+        await asyncio.sleep(60)
+
+
+@asynccontextmanager
+async def lifespan(_):
+    await asyncio.to_thread(db.init)
+    threading.Thread(target=_listen, args=(asyncio.get_running_loop(),), daemon=True).start()
+    task = asyncio.create_task(_reminders())
+    yield
+    task.cancel()
+
+
+app = FastAPI(title="Vacation tracker", lifespan=lifespan)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.exception_handler(HTTPException)
+async def _http(_, e):
+    return JSONResponse({"error": e.detail}, status_code=e.status_code)
+
+
+@app.exception_handler(RequestValidationError)
+async def _val(_, e):
+    return JSONResponse({"error": "Некорректный запрос: проверьте, что все даты заполнены."}, status_code=422)
+
+
+def me(authorization: str = Header(default="")):
+    uid = tokens.get(authorization[7:])
+    if not uid:
+        raise HTTPException(401, "Требуется вход")
+    return db.q("select * from users where id=%s", (uid,))[0]
+
+
+class PartIn(BaseModel):
+    start: date
+    end: date
+
+
+class VacIn(BaseModel):
+    parts: list[PartIn]
+
+
+class LoginIn(BaseModel):
+    login: str
+    password: str
+
+
+class DecisionIn(BaseModel):
+    approve: bool
+    comment: str | None = None
+
+
+class HireIn(BaseModel):
+    hire_date: date
+
+
+api = APIRouter(prefix="/api/v1")
+
+
+@api.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@api.post("/login")
+def login(b: LoginIn):
+    u = db.q("select * from users where login=%s", (b.login,))
+    if not u or not db.check_pw(b.password, u[0]["pass_hash"]):
+        raise HTTPException(401, "Неверный логин или пароль")
+    t = secrets.token_hex(16)
+    tokens[t] = u[0]["id"]
+    return {"token": t}
+
+
+@api.get("/me")
+def get_me(u=Depends(me)):
+    return {**{k: v for k, v in u.items() if k != "pass_hash"}, "today": today()}
+
+
+def user_parts(uid, c=None):
+    rows = db.q("""select p.start_date s, p.end_date e from vacation_parts p join vacations v on v.id=p.vacation_id
+                   where v.user_id=%s and v.status<>'rejected'""", (uid,), c)
+    return [(r["s"], r["e"]) for r in rows]
+
+
+@api.get("/balance")
+def balance(on_date: date | None = Query(None, alias="date"), u=Depends(me)):
+    on = on_date or today()
+    used = sum(plen(p) for p in user_parts(u["id"]) if p[0] <= on)
+    a = rules.accrued(u["hire_date"], on)
+    return {"date": on, "accrued": a, "reserved": used, "available": a - used}
+
+
+def create_vacation(c, u, parts, replaces=None):
+    err = rules.validate_parts(parts, today()) or rules.check_balance(u["hire_date"], user_parts(u["id"], c), parts)
+    if err:
+        raise HTTPException(422, err)
+    v = db.q("insert into vacations(user_id,status,replaces_id) values(%s,'pending',%s) returning *", (u["id"], replaces), c)[0]
+    for s, e in parts:
+        db.q("insert into vacation_parts(vacation_id,start_date,end_date) values(%s,%s,%s)", (v["id"], s, e), c)
+    return v
+
+
+def cancel_vacation(c, v):
+    """До начала дни возвращаются целиком; после начала остаётся использованное (по сегодня включительно)."""
+    t = today()
+    if v["status"] in ("cancelled", "rejected"):
+        raise HTTPException(409, "Заявка уже неактивна")
+    ps = db.q("select * from vacation_parts where vacation_id=%s", (v["id"],), c)
+    if all(p["end_date"] < t for p in ps):
+        raise HTTPException(409, "Отпуск уже закончился")
+    db.q("delete from vacation_parts where vacation_id=%s and start_date>%s", (v["id"], t), c)
+    db.q("update vacation_parts set end_date=%s where vacation_id=%s and end_date>%s", (t, v["id"], t), c)
+    db.q("update vacations set status='cancelled' where id=%s", (v["id"],), c)
+
+
+def _parts(b: VacIn):
+    return [(p.start, p.end) for p in b.parts]
+
+
+@api.post("/vacations")
+def create(b: VacIn, u=Depends(me)):
+    with db.pool.connection() as c:
+        v = create_vacation(c, u, _parts(b))
+    note("new_request", v["id"], u["manager_id"], f"Новая заявка от {u['name']}")
+    ping()
+    return v
+
+
+def _own(vid, u):
+    r = db.q("select * from vacations where id=%s and user_id=%s", (vid, u["id"]))
+    if not r:
+        raise HTTPException(404, "Не найдено")
+    return r[0]
+
+
+@api.post("/vacations/{vid}/cancel")
+def cancel(vid: int, u=Depends(me)):
+    v = _own(vid, u)
+    with db.pool.connection() as c:
+        cancel_vacation(c, v)
+    ping()
+    return {"ok": True}
+
+
+@api.post("/vacations/{vid}/reschedule")
+def reschedule(vid: int, b: VacIn, u=Depends(me)):
+    """Перенос = атомарно: отмена старой заявки + новая заявка на согласование."""
+    old = _own(vid, u)
+    with db.pool.connection() as c:
+        cancel_vacation(c, old)
+        v = create_vacation(c, u, _parts(b), old["id"])
+    note("new_request", v["id"], u["manager_id"], f"Перенос отпуска: {u['name']}")
+    ping()
+    return v
+
+
+@api.post("/vacations/{vid}/decision")
+def decision(vid: int, b: DecisionIn, u=Depends(me)):
+    r = db.q("select v.*, u.manager_id from vacations v join users u on u.id=v.user_id where v.id=%s", (vid,))
+    if not r or r[0]["manager_id"] != u["id"]:
+        raise HTTPException(403, "Это не ваш сотрудник")
+    v = r[0]
+    if not b.approve and not (b.comment or "").strip():
+        raise HTTPException(422, "При отклонении нужен комментарий")
+    done = db.q("update vacations set status=%s, comment=%s where id=%s and status='pending' returning id",
+                ("approved" if b.approve else "rejected", b.comment, vid))
+    if not done:
+        raise HTTPException(409, "Заявка уже рассмотрена")
+    note("decision", vid, v["user_id"], "Отпуск согласован" if b.approve else f"Отпуск отклонён: {b.comment}")
+    ping()
+    return {"ok": True}
+
+
+@api.get("/vacations")
+def vacations(u=Depends(me)):
+    rows = db.q("""select v.id, v.status, v.comment, v.user_id, u.name, u.team,
+        (select json_agg(json_build_object('start',p.start_date,'end',p.end_date) order by p.start_date)
+           from vacation_parts p where p.vacation_id=v.id) parts
+        from vacations v join users u on u.id=v.user_id where v.user_id=%s or u.manager_id=%s order by v.id desc""",
+                (u["id"], u["id"]))
+    for r in rows:
+        if r["user_id"] != u["id"] and r["status"] == "pending":
+            r["conflicts"] = db.q("""select distinct u2.name, p2.start_date start, p2.end_date "end" from vacations v2
+                join users u2 on u2.id=v2.user_id join vacation_parts p2 on p2.vacation_id=v2.id
+                where u2.team=%s and u2.id<>%s and v2.status='approved' and exists(
+                  select 1 from vacation_parts p where p.vacation_id=%s and p.start_date<=p2.end_date and p.end_date>=p2.start_date)""",
+                                  (r["team"], r["user_id"], r["id"]))
+    return rows
+
+
+@api.get("/calendar")
+def calendar(scope: str = "team", u=Depends(me)):
+    company = scope == "company"
+    if company and u["role"] != "hr":
+        raise HTTPException(403, "Только HR")
+    return db.q("""select v.id, v.status, u.name, u.team, p.start_date start, p.end_date "end" from vacations v
+        join users u on u.id=v.user_id join vacation_parts p on p.vacation_id=v.id
+        where v.status in('pending','approved') and (%s or u.team=%s) order by p.start_date""", (company, u["team"]))
+
+
+@api.get("/notifications")
+def notifications(u=Depends(me)):
+    return db.q("select * from notifications where recipient_id=%s order by id desc limit 30", (u["id"],))
+
+
+@api.get("/hr/balances")
+def hr_balances(u=Depends(me)):
+    if u["role"] != "hr":
+        raise HTTPException(403, "Только HR")
+    out = []
+    for x in db.q("select id,name,team,hire_date from users order by name"):
+        parts = user_parts(x["id"])
+        used = sum(plen(p) for p in parts if p[0] <= today())
+        a = rules.accrued(x["hire_date"], today())
+        out.append({**x, "accrued": a, "available": a - used,
+                    "needsAttention": rules.check_balance(x["hire_date"], [], parts) is not None})
+    return out
+
+
+@api.patch("/users/{uid}/hire-date")
+def set_hire(uid: int, b: HireIn, u=Depends(me)):
+    """Остаток считается функцией, поэтому пересчёт автоматический; конфликтные заявки видны как needsAttention."""
+    if u["role"] != "hr":
+        raise HTTPException(403, "Только HR")
+    db.q("update users set hire_date=%s where id=%s", (b.hire_date, uid))
+    ping()
+    return {"ok": True}
+
+
+@api.get("/events")
+async def events(token: str):
+    if token not in tokens:
+        raise HTTPException(401, "Требуется вход")
+    qq: asyncio.Queue = asyncio.Queue()
+    subs.add(qq)
+
+    async def gen():
+        try:
+            yield ": ok\n\n"
+            while True:
+                try:
+                    await asyncio.wait_for(qq.get(), 15)
+                    yield "data: cal\n\n"
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+        finally:
+            subs.discard(qq)
+    return StreamingResponse(gen(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
+
+
+app.include_router(api)
