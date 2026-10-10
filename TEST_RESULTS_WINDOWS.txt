@@ -1,0 +1,114 @@
+﻿============================= test session starts =============================
+platform win32 -- Python 3.14.2, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\User\Desktop\vacation-service\backend\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\User\Desktop\vacation-service\backend
+plugins: anyio-4.15.1, platformdirs-4.12.4
+collecting ... collected 44 items
+
+tests/test_api.py::test_health_reports_db FAILED                         [  2%]
+tests/test_api.py::test_wrong_password PASSED                            [  4%]
+tests/test_api.py::test_requires_auth PASSED                             [  6%]
+tests/test_api.py::test_over_balance_rejected PASSED                     [  9%]
+tests/test_api.py::test_split_rule_message PASSED                        [ 11%]
+tests/test_api.py::test_forecast_grows_with_date PASSED                  [ 13%]
+tests/test_api.py::test_notifications_exactly_once_and_race PASSED       [ 15%]
+tests/test_api.py::test_reject_needs_comment PASSED                      [ 18%]
+tests/test_api.py::test_manager_sees_conflict PASSED                     [ 20%]
+tests/test_api.py::test_cancel_before_start_returns_all_days PASSED      [ 22%]
+tests/test_api.py::test_cancel_after_start_returns_only_unused PASSED    [ 25%]
+tests/test_api.py::test_reschedule_is_atomic PASSED                      [ 27%]
+tests/test_api.py::test_reminder_exactly_once_for_both PASSED            [ 29%]
+tests/test_api.py::test_reminder_catches_up_when_approved_late_or_missed_day PASSED [ 31%]
+tests/test_api.py::test_no_reminder_for_far_or_started_vacations PASSED  [ 34%]
+tests/test_api.py::test_manager_without_manager_is_approved_by_hr PASSED [ 36%]
+tests/test_api.py::test_hr_cannot_approve_requests_of_people_who_have_a_manager PASSED [ 38%]
+tests/test_api.py::test_request_with_nobody_to_approve_is_refused_clearly PASSED [ 40%]
+tests/test_api.py::test_concurrent_requests_cannot_overspend_balance PASSED [ 43%]
+tests/test_api.py::test_hire_date_change_recalculates PASSED             [ 45%]
+tests/test_api.py::test_company_calendar_hr_only PASSED                  [ 47%]
+tests/test_api.py::test_sse_two_sessions PASSED                          [ 50%]
+tests/test_api.py::test_sse_survives_listener_connection_drop FAILED     [ 52%]
+tests/test_api.py::test_year_limit_via_api PASSED                        [ 54%]
+tests/test_api.py::test_hire_change_review_notifies_once_each PASSED     [ 56%]
+tests/test_api.py::test_hire_change_without_conflict_sends_nothing PASSED [ 59%]
+tests/test_api.py::test_notifications_read_flag PASSED                   [ 61%]
+tests/test_api.py::test_sessions_live_in_db_and_logout_works PASSED      [ 63%]
+tests/test_api.py::test_migrations_recorded_once PASSED                  [ 65%]
+tests/test_fallback.py::test_falls_back_to_sqlite_when_embedded_postgres_fails PASSED [ 68%]
+tests/test_rules.py::test_accrual_year PASSED                            [ 70%]
+tests/test_rules.py::test_accrual_before_hire_is_zero PASSED             [ 72%]
+tests/test_rules.py::test_accrual_hire_date_change PASSED                [ 75%]
+tests/test_rules.py::test_no_14_day_part PASSED                          [ 77%]
+tests/test_rules.py::test_part_shorter_than_5 PASSED                     [ 79%]
+tests/test_rules.py::test_more_than_3_parts PASSED                       [ 81%]
+tests/test_rules.py::test_overlap PASSED                                 [ 84%]
+tests/test_rules.py::test_past_start_rejected PASSED                     [ 86%]
+tests/test_rules.py::test_valid_14_plus_7 PASSED                         [ 88%]
+tests/test_rules.py::test_balance_exceeded PASSED                        [ 90%]
+tests/test_rules.py::test_balance_ok PASSED                              [ 93%]
+tests/test_rules.py::test_balance_counts_existing PASSED                 [ 95%]
+tests/test_rules.py::test_year_limit_counts_parts_by_start_year PASSED   [ 97%]
+tests/test_rules.py::test_review_balance_lists_uncovered_parts PASSED    [100%]
+
+================================== FAILURES ===================================
+___________________________ test_health_reports_db ____________________________
+
+    def test_health_reports_db():
+        h = httpx.get(URL + "/health").json()
+>       assert h["status"] == "ok" and h["db"] == ("sqlite" if os.environ.get("VAC_DB") == "sqlite" else "postgres-embedded")
+E       AssertionError: assert ('ok' == 'ok'
+E         
+E           ok and 'sqlite' == 'postgres-embedded'
+E         
+E         - postgres-embedded
+E         + sqlite)
+
+tests\test_api.py:57: AssertionError
+---------------------------- Captured stdout setup ----------------------------
+[db] ┬═╚╠└═╚┼: ┬ёЄЁюхээ√щ PostgreSQL эх чряєёЄшыё  (Users\\User\\Desktop\\vacation-service\\backend\\.venv\\Lib\\site-packages\\pixeltable_pgserver\\pginstall18\\bin\\initdb.exe', '--auth=trust', '--auth-local=trust', '--encoding=utf8', '-U', 'postgres', '-D', 'C:\\Users\\User\\AppData\\Local\\Temp\\vac_pg_0dxxhrj2')' returned non-zero exit status 1.). ╨рсюЄр■ эр чрярёэющ SQLite. ─ы  PostgreSQL єёЄрэютшЄх Visual C++ Redistributable x64 (https://aka.ms/vs/17/release/vc_redist.x64.exe) шыш чрфрщЄх DATABASE_URL.
+----------------------------- Captured log setup ------------------------------
+ERROR    pixeltable_pgserver:pgexec.py:56 Failed postgres command (1, ('C:\\Users\\User\\Desktop\\vacation-service\\backend\\.venv\\Lib\\site-packages\\pixeltable_pgserver\\pginstall18\\bin\\initdb.exe', '--auth=trust', '--auth-local=trust', '--encoding=utf8', '-U', 'postgres', '-D', 'C:\\Users\\User\\AppData\\Local\\Temp\\vac_pg_0dxxhrj2')) with kwargs: `{'user': None}`:
+error:
+Command '('C:\\Users\\User\\Desktop\\vacation-service\\backend\\.venv\\Lib\\site-packages\\pixeltable_pgserver\\pginstall18\\bin\\initdb.exe', '--auth=trust', '--auth-local=trust', '--encoding=utf8', '-U', 'postgres', '-D', 'C:\\Users\\User\\AppData\\Local\\Temp\\vac_pg_0dxxhrj2')' returned non-zero exit status 1.
+stdout:
+
+---
+stderr:
+no data was returned by command ""C:/Users/User/Desktop/vacation-service/backend/.venv/Lib/site-packages/pixeltable_pgserver/pginstall18/bin/postgres.exe" -V"
+child process was terminated by exception 0xC0000135
+initdb: error: program "postgres" is needed by initdb but was not found in the same directory as "C:/Users/User/Desktop/vacation-service/backend/.venv/Lib/site-packages/pixeltable_pgserver/pginstall18/bin/initdb.exe"
+
+---
+_________________ test_sse_survives_listener_connection_drop __________________
+
+    @pytest.mark.skipif(os.environ.get("VAC_DB") == "sqlite", reason="LISTEN/NOTIFY хёЄ№ Єюы№ъю т PostgreSQL")
+    def test_sse_survives_listener_connection_drop():
+        """╬сЁ√т ёюхфшэхэш  LISTEN (яхЁхчряєёъ ┴─, ёхЄ№) эх фюыцхэ эртёхуфр юЄъы■ўрЄ№ юсэютыхэш  схч яхЁхчруЁєчъш."""
+        bo = tok("boss")
+        time.sleep(1)
+>       db.q("select pg_terminate_backend(pid) from pg_stat_activity where query ilike 'listen cal%%' and pid <> pg_backend_pid()")
+
+tests\test_api.py:223: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+app\db.py:88: in q
+    return q(sql, args, cn)
+           ^^^^^^^^^^^^^^^^
+app\db.py:89: in q
+    cur = c.execute(sql, args)
+          ^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
+
+self = <app.db._SqliteConn object at 0x000001AFC80A41E0>
+sql = "select pg_terminate_backend(pid) from pg_stat_activity where query ilike 'listen cal%%' and pid <> pg_backend_pid()"
+args = ()
+
+    def execute(self, sql, args=()):
+>       return _Cur(self._raw.execute(sql.replace("%s", "?"), tuple(args)))
+                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       sqlite3.OperationalError: near "ilike": syntax error
+
+app\db.py:58: OperationalError
+=========================== short test summary info ===========================
+FAILED tests/test_api.py::test_health_reports_db - AssertionError: assert ('o...
+FAILED tests/test_api.py::test_sse_survives_listener_connection_drop - sqlite...
+=================== 2 failed, 42 passed in 97.61s (0:01:37) ===================

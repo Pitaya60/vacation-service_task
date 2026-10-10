@@ -1,17 +1,20 @@
-# ВНИМАНИЕ: этот вывод получен на версии frontend ДО правок D19-D21 (вкладка «Согласование» у HR, тексты после отправки заявки).
-# После правок тесты интерфейса не перезапускались (в среде Claude нет Chromium). Перезапустите: e2e/README.md.
-# Сквозные тесты интерфейса (Chromium, Playwright) — среда Claude (Linux). НЕ Windows пользователя.
-# Backend на SQLite, frontend: vite preview; прогон выполнен дважды подряд на одной БД.
-e2e/test_ui.py::test_rule_error_shows_inside_the_form PASSED             [ 20%]
-e2e/test_ui.py::test_request_reaches_manager_and_rejection_reaches_employee PASSED [ 40%]
-e2e/test_ui.py::test_hr_changes_hire_date_and_accrual_recalculates PASSED [ 60%]
-e2e/test_ui.py::test_bell_counts_unread_and_clears_after_opening PASSED  [ 80%]
-e2e/test_ui.py::test_mobile_layout_has_no_horizontal_scroll PASSED       [100%]
-============================== 5 passed in 5.48s ===============================
+# Сквозные тесты интерфейса (Chromium через Playwright), прогон 2026-10-10T17:30:13Z
+# Среда: облачная песочница Claude (Linux, Python 3.13, Node 22). Не Windows.
+# Прогон 1: backend на встроенном PostgreSQL 18 с демо-данными (см. DEVLOG, этап 11) — 6 passed (вывод ниже не сохранён полностью, только итог).
+# Прогон 2 и 3: как в CI — backend на чистой SQLite, frontend через vite preview, два раза подряд на одной БД.
+e2e/test_ui.py::test_rule_error_shows_inside_the_form PASSED             [ 16%]
+e2e/test_ui.py::test_request_reaches_manager_and_rejection_reaches_employee PASSED [ 33%]
+e2e/test_ui.py::test_hr_changes_hire_date_and_accrual_recalculates PASSED [ 50%]
+e2e/test_ui.py::test_bell_counts_unread_and_clears_after_opening PASSED  [ 66%]
+e2e/test_ui.py::test_mobile_layout_has_no_horizontal_scroll PASSED       [ 83%]
+e2e/test_ui.py::test_live_rule_checks_and_cancel_reaches_manager PASSED  [100%]
+============================== 6 passed in 6.51s ===============================
 
-e2e/test_ui.py::test_rule_error_shows_inside_the_form PASSED             [ 20%]
-e2e/test_ui.py::test_request_reaches_manager_and_rejection_reaches_employee PASSED [ 40%]
-e2e/test_ui.py::test_hr_changes_hire_date_and_accrual_recalculates PASSED [ 60%]
-e2e/test_ui.py::test_bell_counts_unread_and_clears_after_opening PASSED  [ 80%]
-e2e/test_ui.py::test_mobile_layout_has_no_horizontal_scroll PASSED       [100%]
-============================== 5 passed in 6.33s ===============================
+e2e/test_ui.py::test_rule_error_shows_inside_the_form PASSED             [ 16%]
+e2e/test_ui.py::test_request_reaches_manager_and_rejection_reaches_employee PASSED [ 33%]
+e2e/test_ui.py::test_hr_changes_hire_date_and_accrual_recalculates PASSED [ 50%]
+e2e/test_ui.py::test_bell_counts_unread_and_clears_after_opening PASSED  [ 66%]
+e2e/test_ui.py::test_mobile_layout_has_no_horizontal_scroll PASSED       [ 83%]
+e2e/test_ui.py::test_live_rule_checks_and_cancel_reaches_manager PASSED  [100%]
+============================== 6 passed in 7.01s ===============================
+

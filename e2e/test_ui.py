@@ -123,3 +123,24 @@ def test_mobile_layout_has_no_horizontal_scroll(open_as):
     iv.wait_for_selector(".hero")
     assert not iv.evaluate("document.documentElement.scrollWidth > window.innerWidth")
     shot(iv, "mobile")
+
+
+def test_live_rule_checks_and_cancel_reaches_manager(open_as):
+    """Подсказки правил в форме меняются по мере ввода; отмена зачёркивает даты в истории и приходит руководителю уведомлением."""
+    year = random.randint(2042, 2090)
+    iv, bo = open_as("Иван"), open_as("Игорь")
+    iv.wait_for_selector(".hero")
+    iv.fill("#s0", f"{year}-09-06"); iv.fill("#e0", f"{year}-09-10")
+    assert "bad" in iv.locator(".checks li", has_text="Одна часть от 14 дней").get_attribute("class")
+    iv.fill("#e0", f"{year}-09-19")
+    assert "ok" in iv.locator(".checks li", has_text="Одна часть от 14 дней").get_attribute("class")
+    iv.get_by_role("button", name="Отправить на согласование").click()
+    iv.wait_for_selector(".toast.ok")
+    item = iv.locator(".item", has_text=f"{year}").first
+    iv.once("dialog", lambda d: d.accept())
+    item.get_by_role("button", name="Отменить").click()
+    iv.locator(".item.st-cancelled", has_text=f"{year}").wait_for(timeout=10000)
+    bell = bo.locator("button.bell")
+    bell.locator(".bell-count").wait_for(timeout=10000)
+    bell.click()
+    assert bo.locator(".pop li.n-cancelled", has_text=f"{year}").count() == 1

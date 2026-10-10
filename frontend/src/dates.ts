@@ -16,3 +16,15 @@ export const plural = (n: number, [one, few, many]: [string, string, string]) =>
   return a > 10 && a < 20 ? many : b > 1 && b < 5 ? few : b === 1 ? one : many;
 };
 export const daysLabel = (n: number) => `${n} ${plural(n, ['день', 'дня', 'дней'])}`;
+
+/** Метка времени из БД: PostgreSQL отдаёт ISO с часовым поясом, SQLite — «YYYY-MM-DD HH:MM:SS» в UTC. */
+export const stamp = (s: string) => new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(' ', 'T') + 'Z');
+export const ago = (s: string, now = Date.now()) => {
+  const m = Math.round((now - stamp(s).getTime()) / 60000);
+  if (m < 1) return 'только что';
+  if (m < 60) return `${m} мин назад`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} ч назад`;
+  return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(stamp(s)).replace('.', '');
+};
+export const whenShort = (s: string) => new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'short' }).format(stamp(s)).replace('.', '');

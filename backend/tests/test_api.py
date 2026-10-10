@@ -2,7 +2,7 @@
 По умолчанию встроенный PostgreSQL во временной папке; `VAC_DB=sqlite pytest` прогоняет те же тесты на запасной SQLite."""
 import os, tempfile, threading, time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, timedelta
 
 import httpx, pytest, uvicorn
 
@@ -287,6 +287,86 @@ def test_sessions_live_in_db_and_logout_works():
 
 
 def test_migrations_recorded_once():
-    assert [r["version"] for r in db.q("select version from schema_migrations order by version")] == [1, 2, 3]
+    assert [r["version"] for r in db.q("select version from schema_migrations order by version")] == [1, 2, 3, 4]
     with db.connection() as c:
-        assert db.migrate(c, "sqlite" if db.KIND == "sqlite" else "postgres") == [1, 2, 3]   # повторный запуск ничего не меняет
+        assert db.migrate(c, "sqlite" if db.KIND == "sqlite" else "postgres") == [1, 2, 3, 4]   # повторный запуск ничего не меняет
+
+
+# --- доработки backend, этап 11 ---
+
+def test_balance_free_accounts_for_future_requests():
+    """«Доступно» без учёта будущих заявок вводило в заблуждение: free показывает, сколько реально можно ещё запланировать."""
+    iv = tok("ivan")
+    b0 = call(iv, "/balance")[1]
+    assert b0["accrued"] == 45 and b0["free"] == 45 and b0["planned"] == 0
+    call(iv, "/vacations", "POST", {"parts": [P("2026-10-20", "2026-11-02")]})
+    b1 = call(iv, "/balance")[1]
+    assert b1["planned"] == 14 and b1["used"] == 0 and b1["available"] == 45 and b1["free"] == 31
+    # free с даты — ровно столько, сколько пропустит проверка заявки с началом в эту дату: f+1 дней нельзя, f можно
+    f = call(iv, "/balance?date=2026-11-03")[1]["free"]
+    assert f == 32
+    end = lambda n: (date(2026, 11, 3) + timedelta(days=n - 1)).isoformat()
+    assert call(iv, "/vacations", "POST", {"parts": [P("2026-11-03", end(f + 1))]})[0] == 422
+    assert call(iv, "/vacations", "POST", {"parts": [P("2026-11-03", end(f))]})[0] == 200
+
+
+def test_cancel_keeps_dates_and_notifies_approver_once():
+    iv, bo = tok("ivan"), tok("boss")
+    vid = call(iv, "/vacations", "POST", {"parts": [P("2026-12-01", "2026-12-14")]})[1]["id"]
+    assert call(iv, f"/vacations/{vid}/cancel", "POST")[0] == 200
+    row = next(v for v in call(iv, "/vacations")[1] if v["id"] == vid)
+    assert row["status"] == "cancelled" and row["parts"] == [P("2026-12-01", "2026-12-14")] and row["cancelled_on"] == "2026-10-10"
+    n = notes(bo, vid, "cancelled")
+    assert len(n) == 1 and "01.12.2026–14.12.2026" in n[0]["text"]
+    assert call(iv, f"/vacations/{vid}/cancel", "POST")[0] == 409
+    assert call(iv, "/balance?date=2027-01-01")[1]["used"] == 0
+
+
+def test_cancelled_pending_after_its_start_returns_all_days():
+    """Заявку так и не согласовали, дата начала прошла, сотрудник её отменил: в отпуске он не был, дни возвращаются целиком."""
+    iv = tok("ivan")
+    vid = call(iv, "/vacations", "POST", {"parts": [P("2026-10-20", "2026-11-02")]})[1]["id"]
+    os.environ["VAC_TODAY"] = "2026-10-25"
+    assert call(iv, f"/vacations/{vid}/cancel", "POST")[0] == 200
+    assert call(iv, "/balance?date=2027-01-01")[1]["used"] == 0
+
+
+def test_decision_records_who_and_when():
+    iv, bo = tok("ivan"), tok("boss")
+    vid = call(iv, "/vacations", "POST", {"parts": [P("2026-12-01", "2026-12-14")]})[1]["id"]
+    pending = next(v for v in call(bo, "/vacations")[1] if v["id"] == vid)
+    assert pending["balance_after"] == 35 and pending["days"] == 14     # руководитель видит остаток сотрудника
+    call(bo, f"/vacations/{vid}/decision", "POST", {"approve": True, "comment": "  "})
+    row = next(v for v in call(iv, "/vacations")[1] if v["id"] == vid)
+    assert row["decided_by_name"].startswith("Игорь") and row["decided_at"] and row["comment"] is None
+    assert "01.12.2026–14.12.2026" in notes(iv, vid, "decision")[0]["text"]
+
+
+def test_me_names_who_approves():
+    assert call(tok("ivan"), "/me")[1]["approvers"] == ["Игорь (руководитель)"]
+    assert call(tok("boss"), "/me")[1]["approvers"] == ["Анна (HR)"]
+    assert call(tok("hr"), "/me")[1]["approvers"] == []
+
+
+def test_login_is_throttled_after_repeated_failures():
+    for _ in range(main.LOGIN_MAX_FAILS):
+        assert httpx.post(URL + "/login", json={"login": "ghost", "password": "x"}).status_code == 401
+    r = httpx.post(URL + "/login", json={"login": "Ghost", "password": "x"})
+    assert r.status_code == 429 and "Повторите через" in r.json()["error"] and int(r.headers["Retry-After"]) > 0
+    assert httpx.post(URL + "/login", json={"login": "olga", "password": "demo"}).status_code == 200   # другие логины не задеты
+
+
+def test_validation_errors_are_human_readable():
+    iv = tok("ivan")
+    s, b = call(iv, "/vacations", "POST", {"parts": [{"start": "2026-12-01"}]})
+    assert s == 422 and b["error"] == "Укажите даты начала и окончания каждой части отпуска."
+    r = httpx.post(URL + "/login", json={"login": ""})
+    assert r.status_code == 422 and r.json()["error"] == "Введите логин и пароль."
+    assert call(tok("hr"), "/users/3/hire-date", "PATCH", {"hire_date": "2030-01-01"})[0] == 422   # дата выхода в будущем
+
+
+def test_expired_sessions_are_purged_on_login():
+    t = tok("olga")
+    db.q("update sessions set expires_at='2000-01-01T00:00:00+00:00' where token_hash=%s", (main._h(t),))
+    tok("olga")
+    assert not db.q("select 1 from sessions where expires_at < '2001-01-01'")

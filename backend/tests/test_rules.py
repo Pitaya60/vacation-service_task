@@ -57,3 +57,15 @@ def test_review_balance_lists_uncovered_parts():
     assert rules.review_balance(d(2025, 3, 1), parts) == []
     bad = rules.review_balance(d(2026, 6, 1), parts)
     assert bad and bad[0][1] == 14 and bad[0][2] == 28
+
+
+def test_free_days_takes_future_parts_into_account():
+    hire = D(2025, 3, 1)                       # к 2026-10-10 накоплено 45
+    on = D(2026, 10, 10)
+    assert rules.free_days(hire, [], on) == 45
+    assert rules.free_days(hire, [(D(2026, 10, 20), D(2026, 11, 2))], on) == 31
+    # будущая длинная часть, которой «впритык» хватает накопления, ограничивает свободные дни сильнее, чем остаток на сегодня
+    tight = (D(2027, 6, 1), D(2027, 8, 1))  # 62 дня; к 2027-06-01 накоплено 63
+    assert rules.accrued(hire, tight[0]) == 63 and rules.plen(tight) == 62
+    assert rules.free_days(hire, [tight], on) == 1
+    assert rules.free_days(D(2026, 10, 1), [], on) == 0

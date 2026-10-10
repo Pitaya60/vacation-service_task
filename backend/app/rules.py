@@ -56,6 +56,22 @@ def check_year_limit(existing: list[Part], added: list[Part], limit: int = MAX_P
     return None
 
 
+def free_days(hire: date, parts: list[Part], on: date) -> int:
+    """Сколько дней можно ещё запланировать новой частью, начинающейся `on`, не нарушив накопление ни для одной уже поданной части.
+
+    Это не то же самое, что «накоплено минус использовано»: будущий согласованный отпуск уже «занял» дни,
+    которые накопятся к его началу. Новая часть с началом `on` увеличивает нарастающий итог у всех частей, что начинаются позже,
+    поэтому ответ — минимум запаса по `on` и по каждой более поздней части (та же логика, что в check_balance)."""
+    ps = sorted(parts)
+    cum = sum(plen(p) for p in ps if p[0] <= on)
+    free = accrued(hire, on) - cum
+    for p in ps:
+        if p[0] > on:
+            cum += plen(p)
+            free = min(free, accrued(hire, p[0]) - cum)
+    return max(0, free)
+
+
 def review_balance(hire: date, parts: list[Part]) -> list[tuple[Part, int, int]]:
     """Части, которые после смены даты выхода не покрываются накоплением: (часть, накоплено, нужно нарастающим итогом)."""
     out, cum = [], 0

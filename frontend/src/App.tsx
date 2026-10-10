@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { API, AuthError, call, getToken, hasToken, setToken } from './api';
-import { addDays } from './dates';
+import { addDays, ago } from './dates';
 import type { Data, Health, Me, Part, Role, Vac, HrUser } from './types';
 import Calendar from './Calendar';
 import { Approvals, BalanceCards, HrOverview, MyRequests, RequestForm } from './views';
-import { Icon, Logo, short } from './ui';
+import { Avatar, Icon, Logo, short } from './ui';
 
 const ROLE: Record<Role, string> = { employee: 'Сотрудник', manager: 'Руководитель', hr: 'HR' };
 const DEMO = [
@@ -26,6 +26,8 @@ function Login({ onDone, notice }: { onDone: (me: Me) => void; notice: string })
         <div className="brand"><Logo /><span>Отпуска</span></div>
         <h1>Отпуска команды в одном месте</h1>
         <p>Смотрите, сколько дней вам положено, отправляйте заявку и следите за решением. Руководитель согласует, HR видит всю компанию.</p>
+        <div className="login-strip" aria-hidden="true">{Array.from({ length: 28 }, (_, i) => <i key={i} className={i < 9 ? 'used' : i < 14 ? 'planned' : ''} />)}</div>
+        <p className="login-note">28 дней в году: каждая плитка — один день отпуска.</p>
       </section>
       <section className="login-form">
         <h2>Вход</h2>
@@ -128,11 +130,13 @@ export default function App() {
               {notesOpen && (
                 <div className="pop" role="dialog" aria-label="Уведомления">
                   <h3>Уведомления</h3>
-                  {data?.notes.length ? <ul>{data.notes.map((n) => <li key={n.id} className={fresh.has(n.id) ? 'fresh' : ''}>{n.text}</li>)}</ul> : <p className="muted">Пока ничего нового.</p>}
+                  {data?.notes.length ? <ul>{data.notes.map((n) => (
+                    <li key={n.id} className={`n-${n.type}${fresh.has(n.id) ? ' fresh' : ''}`}><span>{n.text}</span><time dateTime={n.created_at}>{ago(n.created_at)}</time></li>))}</ul>
+                    : <p className="muted">Пока ничего нового. Здесь появятся новые заявки, решения и напоминания.</p>}
                 </div>)}
             </div>
-            <div className="me"><b>{short(me.name)}</b><span>{ROLE[me.role] === me.team ? me.team : `${ROLE[me.role]}, ${me.team}`}</span></div>
-            <button className="btn bare" onClick={() => { call('/logout', 'POST').catch(() => undefined); logout(); }}>Выйти</button>
+            <div className="me"><Avatar name={me.name} /><div><b>{short(me.name)}</b><span>{ROLE[me.role] === me.team ? me.team : `${ROLE[me.role]}, ${me.team}`}</span></div></div>
+            <button className="btn bare" aria-label="Выйти" onClick={() => { call('/logout', 'POST').catch(() => undefined); logout(); }}><Icon name="logout" /><span className="hide-sm">Выйти</span></button>
           </div>
         </div>
         <nav className="tabs" aria-label="Разделы">
@@ -145,10 +149,10 @@ export default function App() {
       <main className="page">
         {health?.db === 'sqlite' && <div className="warn" role="note"><b>Работает запасная база SQLite.</b> Встроенный PostgreSQL не запустился. {health.warning}</div>}
         {toast && <div className={`toast ${toast.kind}`} role={toast.kind === 'err' ? 'alert' : 'status'}>{toast.text}<button className="btn icon bare" aria-label="Закрыть" onClick={() => setToast(null)}><Icon name="x" /></button></div>}
-        {!data ? <p className="muted">Загружаю данные…</p> : (<>
+        {!data ? <div className="skeleton" aria-busy="true" aria-label="Загружаю данные"><i /><i /><i /></div> : (<>
           {tab === 'me' && (<>
             <BalanceCards me={me} bal={data.bal} fc={data.fc} date={fDate} setDate={setFDate} />
-            <RequestForm today={me.today} resched={resched} onSubmit={send} onStopResched={() => setResched(null)} />
+            <RequestForm today={me.today} resched={resched} approvers={me.approvers ?? []} free={data.bal.free} onSubmit={send} onStopResched={() => setResched(null)} />
             <MyRequests me={me} vac={data.vac} onCancel={cancel} onResched={(v) => { setResched(v); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />
           </>)}
           {tab === 'appr' && <Approvals me={me} vac={data.vac} onDecide={decide} />}

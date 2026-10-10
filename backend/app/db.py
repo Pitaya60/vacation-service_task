@@ -6,11 +6,14 @@
 3. Если встроенный не стартовал (например, на Windows 0xC0000135) или VAC_DB=sqlite -> SQLite-файл .vacation.sqlite3.
 SQLite нужен только как запасной путь для локального запуска: LISTEN/NOTIFY заменён обратным вызовом в процессе (один процесс backend).
 """
-import hashlib, os, pathlib, secrets, sqlite3, threading
+import hashlib, logging, os, pathlib, secrets, sqlite3, threading
 from contextlib import contextmanager
 from datetime import date
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
+log = logging.getLogger("vacation.db")
+for _name in ("pixeltable_pgserver", "pgserver", "psycopg.pool"):  # их INFO (вывод initdb и т. п.) засоряет консоль
+    logging.getLogger(_name).setLevel(logging.WARNING)
 DSN: str | None = None
 KIND = "none"  # postgres | postgres-embedded | sqlite
 pool = None
@@ -99,6 +102,14 @@ def notify():
         q("select pg_notify('cal','x')")
 
 
+def close():
+    """Закрыть пул соединений при остановке backend (иначе потоки пула ждут таймаута и пишут предупреждения)."""
+    global pool
+    if pool is not None:
+        pool.close()
+        pool = None
+
+
 def reset_data():
     """Очистка заявок и уведомлений (для тестов); пользователи остаются."""
     if KIND == "sqlite":
@@ -172,7 +183,7 @@ def init():
             warning = ("Встроенный PostgreSQL не запустился (" + detail.strip().splitlines()[-1] + "). "
                        "Работаю на запасной SQLite. Для PostgreSQL установите Visual C++ Redistributable x64 "
                        "(https://aka.ms/vs/17/release/vc_redist.x64.exe) или задайте DATABASE_URL.")
-            print("[db] ВНИМАНИЕ:", warning)
+            log.warning(warning)
             DSN = None
             _start_sqlite()
     if KIND != "sqlite":
@@ -180,7 +191,8 @@ def init():
         from psycopg_pool import ConnectionPool
         pool = ConnectionPool(DSN, kwargs={"row_factory": dict_row}, min_size=1, max_size=10, open=True)
     with connection() as c:
-        migrate(c, "sqlite" if KIND == "sqlite" else "postgres")
+        applied = migrate(c, "sqlite" if KIND == "sqlite" else "postgres")
+    log.info("БД: %s, миграции: %s", KIND, applied)
     with connection() as c:
         if not c.execute("select 1 from users limit 1").fetchone():
             ins = "insert into users(login,pass_hash,name,role,hire_date,team,manager_id) values(%s,%s,%s,%s,%s,%s,%s)"
