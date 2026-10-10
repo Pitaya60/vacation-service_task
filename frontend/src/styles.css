@@ -68,9 +68,13 @@ label { font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .me { display: flex; flex-direction: column; line-height: 1.25; text-align: right; }
 .me span { font-size: 12px; opacity: .85; font-weight: 500; }
 .notes { position: relative; }
+.bell { position: relative; }
+.bell-count { position: absolute; top: 4px; right: 3px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--sun); color: var(--ink); font-size: 11px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
+.role-hr .bell-count { background: var(--blue); color: #fff; }
 .pop { position: absolute; right: 0; top: 52px; width: 320px; max-width: calc(100vw - 32px); max-height: 380px; overflow: auto; background: #fff; color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 16px; box-shadow: 0 12px 32px rgba(11,27,77,.2); z-index: 30; }
 .pop ul { list-style: none; margin: 10px 0 0; padding: 0; }
-.pop li { padding: 10px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.pop li { padding: 10px 8px; border-top: 1px solid var(--line); font-size: 14px; }
+.pop li.fresh { background: var(--sun-t); border-left: 4px solid var(--sun); }
 .tabs { max-width: 1040px; margin: 0 auto; padding: 0 12px; display: flex; gap: 4px; overflow-x: auto; }
 .tab { position: relative; background: transparent; border: 0; color: inherit; font-family: inherit; font-size: 14px; font-weight: 600; line-height: 1; padding: 14px 14px 16px; cursor: pointer; opacity: .8; white-space: nowrap; }
 .tab:hover { opacity: 1; }
@@ -140,6 +144,7 @@ td { padding: 12px; border-bottom: 1px solid var(--line); vertical-align: middle
 th.num, td.num { text-align: right; }
 td .inline { display: flex; align-items: center; gap: 8px; }
 td input { width: 170px; min-height: 40px; }
+.problem { max-width: 260px; margin: 4px 0 0; font-size: 12px; }
 tbody tr:hover { background: #fafbff; }
 
 /* календарь */

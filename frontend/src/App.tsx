@@ -48,7 +48,7 @@ export default function App() {
   const [health, setHealth] = useState<Health | null>(null), [data, setData] = useState<Data | null>(null);
   const [tab, setTab] = useState(''), [tick, setTick] = useState(0), [fDate, setFDate] = useState('');
   const [resched, setResched] = useState<Vac | null>(null), [toast, setToast] = useState<Toast | null>(null), [notesOpen, setNotesOpen] = useState(false);
-  const [notice, setNotice] = useState('');
+  const [notice, setNotice] = useState(''), [fresh, setFresh] = useState<Set<number>>(new Set());
   const timer = useRef<number>();
 
   const say = useCallback((kind: Toast['kind'], text: string) => {
@@ -88,6 +88,12 @@ export default function App() {
   if (!me) return <Login onDone={start} notice={notice} />;
 
   const waiting = (data?.vac ?? []).filter((v) => v.user_id !== me.id && v.status === 'pending').length;
+  const unread = (data?.notes ?? []).filter((n) => !n.read_at).length;
+  const toggleNotes = () => {
+    if (notesOpen) { setNotesOpen(false); setFresh(new Set()); return; }
+    setFresh(new Set((data?.notes ?? []).filter((n) => !n.read_at).map((n) => n.id))); setNotesOpen(true);
+    if (unread) call('/notifications/read', 'POST').then(refresh).catch(() => undefined);
+  };
   const tabs = {
     employee: [['me', 'Мой отпуск'], ['team', 'Календарь команды']],
     manager: [['appr', 'Согласование'], ['team', 'Календарь команды'], ['me', 'Мой отпуск']],
@@ -118,15 +124,15 @@ export default function App() {
           <div className="brand"><Logo /><span>Отпуска</span></div>
           <div className="who">
             <div className="notes">
-              <button className="btn icon bare" aria-label="Уведомления" aria-expanded={notesOpen} onClick={() => setNotesOpen(!notesOpen)}><Icon name="bell" /></button>
+              <button className="btn icon bare bell" aria-label={unread ? `Уведомления, непрочитанных: ${unread}` : 'Уведомления'} aria-expanded={notesOpen} onClick={toggleNotes}><Icon name="bell" />{unread > 0 && <span className="bell-count">{unread}</span>}</button>
               {notesOpen && (
                 <div className="pop" role="dialog" aria-label="Уведомления">
                   <h3>Уведомления</h3>
-                  {data?.notes.length ? <ul>{data.notes.map((n) => <li key={n.id}>{n.text}</li>)}</ul> : <p className="muted">Пока ничего нового.</p>}
+                  {data?.notes.length ? <ul>{data.notes.map((n) => <li key={n.id} className={fresh.has(n.id) ? 'fresh' : ''}>{n.text}</li>)}</ul> : <p className="muted">Пока ничего нового.</p>}
                 </div>)}
             </div>
             <div className="me"><b>{short(me.name)}</b><span>{ROLE[me.role] === me.team ? me.team : `${ROLE[me.role]}, ${me.team}`}</span></div>
-            <button className="btn bare" onClick={() => logout()}>Выйти</button>
+            <button className="btn bare" onClick={() => { call('/logout', 'POST').catch(() => undefined); logout(); }}>Выйти</button>
           </div>
         </div>
         <nav className="tabs" aria-label="Разделы">

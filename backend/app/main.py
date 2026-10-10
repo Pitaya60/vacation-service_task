@@ -1,6 +1,6 @@
-import asyncio, os, secrets, threading
+import asyncio, hashlib, os, secrets, threading, time
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import psycopg
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query
@@ -12,8 +12,22 @@ from pydantic import BaseModel
 from . import db, rules
 from .rules import plen
 
-tokens: dict[str, int] = {}
 subs: set[asyncio.Queue] = set()
+SESSION_DAYS = 7
+
+
+def _h(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+def user_by_token(token: str):
+    """Сессии лежат в БД (хранится хеш токена), поэтому перезапуск backend не разлогинивает."""
+    if not token:
+        return None
+    r = db.q("select user_id, expires_at from sessions where token_hash=%s", (_h(token),))
+    if not r or r[0]["expires_at"] < datetime.now(timezone.utc).isoformat():
+        return None
+    return r[0]["user_id"]
 
 
 def today() -> date:  # VAC_TODAY нужен только тестам
@@ -47,10 +61,19 @@ def remind():
 
 
 def _listen(loop):
-    with psycopg.connect(db.DSN, autocommit=True) as c:
-        c.execute("listen cal")
-        for _ in c.notifies():
-            loop.call_soon_threadsafe(lambda: [s.put_nowait("cal") for s in list(subs)])
+    """Слушает NOTIFY. При обрыве соединения (перезапуск БД, сеть) переподключается:
+    без этого календари молча переставали бы обновляться до перезапуска backend."""
+    while True:
+        try:
+            with psycopg.connect(db.DSN, autocommit=True) as c:
+                c.execute("listen cal")
+                # после переподключения могли пропасть события: пусть клиенты один раз перечитают данные
+                loop.call_soon_threadsafe(lambda: [s.put_nowait("cal") for s in list(subs)])
+                for _ in c.notifies():
+                    loop.call_soon_threadsafe(lambda: [s.put_nowait("cal") for s in list(subs)])
+        except Exception as e:
+            print("[listen] соединение потеряно, повтор через 2 с:", e)
+        time.sleep(2)
 
 
 async def _reminders():
@@ -90,7 +113,7 @@ async def _val(_, e):
 
 
 def me(authorization: str = Header(default="")):
-    uid = tokens.get(authorization[7:])
+    uid = user_by_token(authorization[7:])
     if not uid:
         raise HTTPException(401, "Требуется вход")
     return db.q("select * from users where id=%s", (uid,))[0]
@@ -133,8 +156,15 @@ def login(b: LoginIn):
     if not u or not db.check_pw(b.password, u[0]["pass_hash"]):
         raise HTTPException(401, "Неверный логин или пароль")
     t = secrets.token_hex(16)
-    tokens[t] = u[0]["id"]
+    db.q("insert into sessions(token_hash,user_id,expires_at) values(%s,%s,%s)",
+         (_h(t), u[0]["id"], (datetime.now(timezone.utc) + timedelta(days=SESSION_DAYS)).isoformat()))
     return {"token": t}
+
+
+@api.post("/logout")
+def logout(authorization: str = Header(default="")):
+    db.q("delete from sessions where token_hash=%s", (_h(authorization[7:]),))
+    return {"ok": True}
 
 
 @api.get("/me")
@@ -157,7 +187,9 @@ def balance(on_date: date | None = Query(None, alias="date"), u=Depends(me)):
 
 
 def create_vacation(c, u, parts, replaces=None):
-    err = rules.validate_parts(parts, today()) or rules.check_balance(u["hire_date"], user_parts(u["id"], c), parts)
+    existing = user_parts(u["id"], c)
+    err = (rules.validate_parts(parts, today()) or rules.check_balance(u["hire_date"], existing, parts)
+           or rules.check_year_limit(existing, parts))
     if err:
         raise HTTPException(422, err)
     v = db.q("insert into vacations(user_id,status,replaces_id) values(%s,'pending',%s) returning *", (u["id"], replaces), c)[0]
@@ -270,7 +302,15 @@ def calendar(scope: str = "team", u=Depends(me)):
 
 @api.get("/notifications")
 def notifications(u=Depends(me)):
-    return db.q("select * from notifications where recipient_id=%s order by id desc limit 30", (u["id"],))
+    return db.q("select id,type,vacation_id,text,created_at,read_at from notifications where recipient_id=%s order by id desc limit 30", (u["id"],))
+
+
+@api.post("/notifications/read")
+def notifications_read(u=Depends(me)):
+    """Отметить все свои уведомления прочитанными."""
+    db.q("update notifications set read_at=%s where recipient_id=%s and read_at is null",
+         (datetime.now(timezone.utc).isoformat(), u["id"]))
+    return {"ok": True}
 
 
 @api.get("/hr/balances")
@@ -282,9 +322,26 @@ def hr_balances(u=Depends(me)):
         parts = user_parts(x["id"])
         used = sum(plen(p) for p in parts if p[0] <= today())
         a = rules.accrued(x["hire_date"], today())
-        out.append({**x, "accrued": a, "available": a - used,
-                    "needsAttention": rules.check_balance(x["hire_date"], [], parts) is not None})
+        bad = rules.review_balance(x["hire_date"], parts)
+        out.append({**x, "accrued": a, "available": a - used, "needsAttention": bool(bad),
+                    "problem": (f"К {bad[0][0][0].isoformat()} накоплено {bad[0][1]} дн., а заявки требуют {bad[0][2]} дн." if bad else None)})
     return out
+
+
+def review_after_hire_change(uid: int, name: str, manager_id: int | None, hire: date):
+    """Пересмотр после смены даты выхода: заявки, которые больше не покрываются накоплением, не отменяются сами,
+    но сотрудник, руководитель и HR получают по одному уведомлению на заявку (ключ unique в БД)."""
+    rows = db.q("""select v.id vid, p.start_date s, p.end_date e from vacations v join vacation_parts p on p.vacation_id=v.id
+                   where v.user_id=%s and v.status in ('pending','approved')""", (uid,))
+    owner = {}
+    for r in rows:
+        owner.setdefault((r["s"], r["e"]), r["vid"])
+    hrs = [x["id"] for x in db.q("select id from users where role='hr'")]
+    for (s, e), a, need in rules.review_balance(hire, list(owner)):
+        vid = owner[(s, e)]
+        text = f"Заявка №{vid} ({name}) больше не покрывается накоплением: к {s.isoformat()} накоплено {a} дн., нужно {need} дн. Проверьте заявку."
+        for rid in {uid, manager_id, *hrs}:
+            note("balance_review", vid, rid, text)
 
 
 @api.patch("/users/{uid}/hire-date")
@@ -292,14 +349,18 @@ def set_hire(uid: int, b: HireIn, u=Depends(me)):
     """Остаток считается функцией, поэтому пересчёт автоматический; конфликтные заявки видны как needsAttention."""
     if u["role"] != "hr":
         raise HTTPException(403, "Только HR")
+    target = db.q("select * from users where id=%s", (uid,))
+    if not target:
+        raise HTTPException(404, "Сотрудник не найден")
     db.q("update users set hire_date=%s where id=%s", (b.hire_date, uid))
+    review_after_hire_change(target[0]["id"], target[0]["name"], target[0]["manager_id"], b.hire_date)
     ping()
     return {"ok": True}
 
 
 @api.get("/events")
 async def events(token: str):
-    if token not in tokens:
+    if not user_by_token(token):
         raise HTTPException(401, "Требуется вход")
     qq: asyncio.Queue = asyncio.Queue()
     subs.add(qq)

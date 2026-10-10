@@ -48,7 +48,7 @@ export function RequestForm({ today, resched, onSubmit, onStopResched }: {
       </div>
       <p className="muted">{resched
         ? `Сейчас отпуск: ${resched.parts.map((p) => range(p.start, p.end)).join(', ')}. Старая заявка отменится, новая уйдёт на согласование.`
-        : 'Можно разбить отпуск на части: не больше трёх, одна от 14 дней, остальные от 5.'}</p>
+        : 'Можно разбить отпуск на части: не больше трёх в заявке, одна от 14 дней, остальные от 5. В календарном году всего не больше четырёх частей.'}</p>
       {parts.map((p, i) => (
         <div className="part" key={i}>
           <div className="field"><label htmlFor={`s${i}`}>{parts.length > 1 ? `Часть ${i + 1}: с` : 'С'}</label>
@@ -166,7 +166,7 @@ function HrRow({ u, save }: { u: HrUser; save: (hd: string) => Promise<void> }) 
         {changed && <button className="btn primary sm" disabled={busy} onClick={() => { setBusy(true); save(hd).finally(() => setBusy(false)); }}>Сохранить</button>}</div></td>
       <td className="num">{u.accrued}</td>
       <td className="num"><b>{u.available}</b></td>
-      <td>{u.needsAttention ? <span className="chip chip-pending">Проверить заявки</span> : <span className="muted">В порядке</span>}</td>
+      <td>{u.needsAttention ? <><span className="chip chip-pending">Проверить заявки</span>{u.problem && <span className="muted block problem">{u.problem}</span>}</> : <span className="muted">В порядке</span>}</td>
     </tr>
   );
 }

@@ -150,3 +150,80 @@ def test_sse_two_sessions():
     time.sleep(1)
     call(tok("ivan"), "/vacations", "POST", {"parts": [P("2026-12-01", "2026-12-14")]})
     assert got.wait(5), "боксу не пришло событие по SSE"
+
+
+@pytest.mark.skipif(os.environ.get("VAC_DB") == "sqlite", reason="LISTEN/NOTIFY есть только в PostgreSQL")
+def test_sse_survives_listener_connection_drop():
+    """Обрыв соединения LISTEN (перезапуск БД, сеть) не должен навсегда отключать обновления без перезагрузки."""
+    bo = tok("boss")
+    time.sleep(1)
+    db.q("select pg_terminate_backend(pid) from pg_stat_activity where query ilike 'listen cal%%' and pid <> pg_backend_pid()")
+    got = threading.Event()
+    def listen():
+        with httpx.stream("GET", URL + "/events", params={"token": bo}, timeout=20) as r:
+            for line in r.iter_lines():
+                if line.startswith("data:"):
+                    got.set(); return
+    threading.Thread(target=listen, daemon=True).start()
+    time.sleep(3)  # даём слушателю переподключиться
+    call(tok("ivan"), "/vacations", "POST", {"parts": [P("2026-12-01", "2026-12-14")]})
+    assert got.wait(5), "после обрыва соединения событие по SSE больше не приходит"
+
+
+def test_year_limit_via_api():
+    iv = tok("ivan")
+    ok = lambda parts: call(iv, "/vacations", "POST", {"parts": parts})
+    assert ok([P("2027-02-01", "2027-02-14"), P("2027-03-01", "2027-03-05"), P("2027-04-01", "2027-04-05")])[0] == 200
+    assert ok([P("2027-05-03", "2027-05-16")])[0] == 200                       # четвёртая часть в 2027
+    s, b = ok([P("2027-06-01", "2027-06-14")])
+    assert s == 422 and "больше 4 частей в год" in b["error"]                  # пятая не проходит, текст понятный
+    assert ok([P("2028-01-10", "2028-01-23")])[0] == 200                       # другой год — свой лимит
+
+
+def test_hire_change_review_notifies_once_each():
+    iv, bo, hr = tok("ivan"), tok("boss"), tok("hr")
+    vid = call(iv, "/vacations", "POST", {"parts": [P("2026-12-01", "2026-12-28")]})[1]["id"]
+    assert call(hr, "/users/3/hire-date", "PATCH", {"hire_date": "2026-06-01"})[0] == 200
+    call(hr, "/users/3/hire-date", "PATCH", {"hire_date": "2026-06-01"})          # повтор не плодит уведомления
+    for t in (iv, bo, hr):
+        assert len(notes(t, vid, "balance_review")) == 1
+    row = [u for u in call(hr, "/hr/balances")[1] if u["id"] == 3][0]
+    assert row["needsAttention"] and "накоплено 14" in row["problem"]
+    assert call(hr, "/users/999/hire-date", "PATCH", {"hire_date": "2026-06-01"})[0] == 404
+    assert call(iv, "/users/3/hire-date", "PATCH", {"hire_date": "2026-06-01"})[0] == 403
+
+
+def test_hire_change_without_conflict_sends_nothing():
+    iv, hr = tok("ivan"), tok("hr")
+    vid = call(iv, "/vacations", "POST", {"parts": [P("2026-12-01", "2026-12-14")]})[1]["id"]
+    call(hr, "/users/3/hire-date", "PATCH", {"hire_date": "2025-01-01"})
+    assert notes(iv, vid, "balance_review") == []
+
+
+def test_notifications_read_flag():
+    iv, bo = tok("ivan"), tok("boss")
+    call(iv, "/vacations", "POST", {"parts": [P("2026-12-01", "2026-12-14")]})
+    assert [n["read_at"] for n in call(bo, "/notifications")[1]] == [None]
+    assert call(bo, "/notifications/read", "POST")[0] == 200
+    assert all(n["read_at"] for n in call(bo, "/notifications")[1])
+    call(iv, "/vacations", "POST", {"parts": [P("2027-02-01", "2027-02-14")]})
+    assert [bool(n["read_at"]) for n in call(bo, "/notifications")[1]] == [False, True]   # новое снова непрочитано
+
+
+def test_sessions_live_in_db_and_logout_works():
+    import hashlib
+    t = tok("ivan")
+    hashes = [r["token_hash"] for r in db.q("select token_hash from sessions")]
+    assert hashlib.sha256(t.encode()).hexdigest() in hashes and t not in hashes   # токен в открытом виде не хранится
+    assert call(t, "/me")[0] == 200
+    assert call(t, "/logout", "POST")[0] == 200
+    assert call(t, "/me")[0] == 401
+    t2 = tok("ivan")
+    db.q("update sessions set expires_at='2000-01-01T00:00:00+00:00'")
+    assert call(t2, "/me")[0] == 401                                              # просроченная сессия не работает
+
+
+def test_migrations_recorded_once():
+    assert [r["version"] for r in db.q("select version from schema_migrations order by version")] == [1, 2, 3]
+    with db.connection() as c:
+        assert db.migrate(c, "sqlite" if db.KIND == "sqlite" else "postgres") == [1, 2, 3]   # повторный запуск ничего не меняет

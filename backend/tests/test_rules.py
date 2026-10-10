@@ -1,4 +1,5 @@
 from datetime import date as D
+from app import rules
 from app.rules import accrued, validate_parts, check_balance
 
 P = lambda a, b: (D.fromisoformat(a), D.fromisoformat(b))
@@ -39,3 +40,20 @@ def test_balance_ok():
 
 def test_balance_counts_existing():
     assert "накоплено" in check_balance(D(2025, 6, 1), [P("2026-01-05", "2026-01-25")], [P("2026-02-01", "2026-02-14")])
+
+
+def test_year_limit_counts_parts_by_start_year():
+    from datetime import date as d
+    ex = [(d(2027, 2, 1), d(2027, 2, 14)), (d(2027, 3, 1), d(2027, 3, 5)), (d(2027, 4, 1), d(2027, 4, 5))]
+    assert rules.check_year_limit(ex, [(d(2027, 5, 3), d(2027, 5, 16))]) is None       # четвёртая часть разрешена
+    msg = rules.check_year_limit(ex + [(d(2027, 5, 3), d(2027, 5, 16))], [(d(2027, 6, 1), d(2027, 6, 14))])
+    assert msg and "2027" in msg and "больше 4" in msg                                  # пятая нельзя
+    assert rules.check_year_limit(ex * 2, [(d(2028, 1, 10), d(2028, 1, 23))]) is None   # другой год считается отдельно
+
+
+def test_review_balance_lists_uncovered_parts():
+    from datetime import date as d
+    parts = [(d(2026, 12, 1), d(2026, 12, 28))]
+    assert rules.review_balance(d(2025, 3, 1), parts) == []
+    bad = rules.review_balance(d(2026, 6, 1), parts)
+    assert bad and bad[0][1] == 14 and bad[0][2] == 28

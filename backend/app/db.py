@@ -131,11 +131,29 @@ def _start_sqlite():
     KIND = "sqlite"
 
 
-def _schema_for(kind: str) -> str:
-    sql = (pathlib.Path(__file__).parent / "schema.sql").read_text(encoding="utf-8")
+def _prepare(sql: str, kind: str) -> str:
     if kind == "sqlite":
-        sql = sql.replace("serial primary key", "integer primary key autoincrement").replace("timestamptz default now()", "timestamp default current_timestamp")
+        sql = sql.replace("serial primary key", "integer primary key autoincrement").replace("timestamptz default now()", "timestamp default current_timestamp").replace("timestamptz", "timestamp")
     return sql
+
+
+def _statements(sql: str):
+    return [x.strip() for x in sql.split(";") if x.strip()]
+
+
+def migrate(c, kind: str) -> list[int]:
+    """Версионированные миграции: migrations/NNN_имя.sql применяются по порядку, применённые записываются в schema_migrations."""
+    c.execute(_prepare("create table if not exists schema_migrations(version integer primary key, name text not null, applied_at timestamptz default now())", kind))
+    done = {r["version"] for r in c.execute("select version from schema_migrations").fetchall()}
+    for f in sorted((pathlib.Path(__file__).parent / "migrations").glob("*.sql")):
+        version = int(f.name.split("_")[0])
+        if version in done:
+            continue
+        for stmt in _statements(_prepare(f.read_text(encoding="utf-8"), kind)):
+            c.execute(stmt)
+        c.execute("insert into schema_migrations(version,name) values(%s,%s)", (version, f.name))
+        done.add(version)
+    return sorted(done)
 
 
 def init():
@@ -157,17 +175,12 @@ def init():
             print("[db] ВНИМАНИЕ:", warning)
             DSN = None
             _start_sqlite()
-    if KIND == "sqlite":
-        with connection() as c:
-            for stmt in _schema_for("sqlite").split(";"):
-                if stmt.strip():
-                    c.execute(stmt)
-    else:
+    if KIND != "sqlite":
         from psycopg.rows import dict_row
         from psycopg_pool import ConnectionPool
         pool = ConnectionPool(DSN, kwargs={"row_factory": dict_row}, min_size=1, max_size=10, open=True)
-        with connection() as c:
-            c.execute(_schema_for("postgres"))
+    with connection() as c:
+        migrate(c, "sqlite" if KIND == "sqlite" else "postgres")
     with connection() as c:
         if not c.execute("select 1 from users limit 1").fetchone():
             ins = "insert into users(login,pass_hash,name,role,hire_date,team,manager_id) values(%s,%s,%s,%s,%s,%s,%s)"

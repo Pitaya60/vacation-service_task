@@ -2,6 +2,7 @@
 from datetime import date
 
 ANNUAL = 28
+MAX_PARTS_PER_YEAR = 4  # частей отпуска в календарном году (по дате начала), считаются заявки в статусах «на рассмотрении» и «согласован»
 Part = tuple[date, date]  # (начало, конец) включительно
 
 
@@ -42,3 +43,25 @@ def check_balance(hire: date, existing: list[Part], added: list[Part]) -> str | 
         if cum > a:
             return f"К {p[0].isoformat()} накоплено {a} дн., а с этой заявкой потребуется {cum} дн."
     return None
+
+
+def check_year_limit(existing: list[Part], added: list[Part], limit: int = MAX_PARTS_PER_YEAR) -> str | None:
+    """Не более `limit` частей отпуска в календарном году (год определяется по дате начала части)."""
+    by_year: dict[int, int] = {}
+    for p in existing + added:
+        by_year[p[0].year] = by_year.get(p[0].year, 0) + 1
+    for year in sorted({p[0].year for p in added}):
+        if by_year[year] > limit:
+            return f"В {year} году уже {by_year[year] - len([p for p in added if p[0].year == year])} частей отпуска, а с этой заявкой будет {by_year[year]}: больше {limit} частей в год нельзя."
+    return None
+
+
+def review_balance(hire: date, parts: list[Part]) -> list[tuple[Part, int, int]]:
+    """Части, которые после смены даты выхода не покрываются накоплением: (часть, накоплено, нужно нарастающим итогом)."""
+    out, cum = [], 0
+    for p in sorted(parts):
+        cum += plen(p)
+        a = accrued(hire, p[0])
+        if cum > a:
+            out.append((p, a, cum))
+    return out

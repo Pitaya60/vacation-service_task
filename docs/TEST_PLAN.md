@@ -15,11 +15,18 @@
 | T09 | Напоминание ровно одно, обоим | test_reminder_exactly_once_for_both | Pass (сессия Claude) |
 | T10 | Календарь компании только для HR; нет входа — 401 | test_company_calendar_hr_only, test_requires_auth | Pass (сессия Claude) |
 | T11 | Две сессии: действие одной приходит другой по SSE | test_sse_two_sessions | Pass (сессия Claude) |
-| T15 | Те же тесты на запасной SQLite (`VAC_DB=sqlite`) | весь test_api.py | Pass: 29 passed (сессия Claude) |
+| T17 | Годовой лимит: не больше 4 частей в календарном году, другой год считается отдельно | test_rules.py::test_year_limit_*, test_year_limit_via_api | Pass (сессия Claude) |
+| T18 | Смена даты выхода: заявки, не покрытые накоплением, дают по одному уведомлению сотруднику, руководителю и HR; без конфликта уведомлений нет; 403 и 404 | test_hire_change_* | Pass (сессия Claude) |
+| T19 | Уведомления: `read_at`, новое снова непрочитано | test_notifications_read_flag | Pass (сессия Claude) |
+| T20 | Сессии в БД: хеш токена, выход, просрочка | test_sessions_live_in_db_and_logout_works | Pass (сессия Claude); реальный перезапуск процесса вручную не проверялся |
+| T21 | Миграции применяются один раз, повторный запуск ничего не меняет | test_migrations_recorded_once | Pass (сессия Claude) |
+| T22 | Интерфейс в Chromium: ошибка в форме, заявка → руководитель без перезагрузки, отказ с причиной, правка даты выхода у HR, счётчик уведомлений, мобильная ширина | e2e/test_ui.py | Pass: 5 passed, дважды подряд (сессия Claude, `E2E_RESULTS.txt`) |
+| T23 | Обрыв соединения LISTEN: после переподключения SSE снова доставляет события | test_sse_survives_listener_connection_drop | Pass на PostgreSQL (сессия Claude); до исправления падал; на SQLite пропущен |
+| T15 | Те же тесты на запасной SQLite (`VAC_DB=sqlite`) | весь test_api.py | Pass: 37 passed, 1 skipped (сессия Claude) |
 | T16 | Сбой встроенного PostgreSQL → автоматический переход на SQLite, `/health` показывает `sqlite` и предупреждение, заявка создаётся | test_fallback.py | Pass (сессия Claude, сбой смоделирован неверным `PGDATA`; реальный сбой на Windows этим не воспроизведён) |
 | T12 | Свежий запуск на вашем компьютере (`start.bat`) | вручную | **Не выполнено — заполнить** |
 | T13 | Две вкладки браузера вручную (ivan + boss) | вручную | **Не выполнено — заполнить** |
 | T14 | Перезапуск backend, данные сохранились | вручную (.pgdata) | **Не выполнено — заполнить** |
 
-Результат «Pass (сессия Claude)» получен в среде Claude: Linux, Python 3.12, 29 passed на PostgreSQL 18.4 и 29 passed на SQLite (вывод в `TEST_RESULTS.txt`). Для сдачи сохраните свой вывод: `python -m pytest -v > ..\TEST_RESULTS.txt`.
-Не покрыто тестами: поведение интерфейса, недоступность backend во frontend, ограничения БД напрямую.
+Результат «Pass (сессия Claude)» получен в среде Claude: Linux, Python 3.12, 38 passed на PostgreSQL 18.4 и 37 passed + 1 skipped на SQLite (вывод в `TEST_RESULTS.txt`); сквозные тесты интерфейса — `E2E_RESULTS.txt`. Для сдачи сохраните свой вывод: `python -m pytest -v > ..\TEST_RESULTS.txt`.
+Не покрыто тестами: недоступность backend во frontend, ограничения БД напрямую, другие браузеры, Windows.
