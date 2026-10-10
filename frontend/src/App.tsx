@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 const API = (import.meta as any).env.VITE_API ?? 'http://localhost:8000/api/v1';
 let tok = '';
 const call = async (p: string, m = 'GET', b?: any) => {
-  const r = await fetch(API + p, { method: m, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: b ? JSON.stringify(b) : undefined });
+  const r = await fetch(API + p, { method: m, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + tok }, body: b ? JSON.stringify(b) : undefined })
+    .catch(() => { throw new Error('Нет связи с backend (' + API + '). Он запущен? Откройте ' + API + '/health'); });
   const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j;
 };
 const fmt = (p: any) => `${p.start} — ${p.end}`;
@@ -52,9 +53,27 @@ export default function App() {
         <button onClick={() => { const c = prompt('Причина отказа'); guard(() => call(`/vacations/${v.id}/decision`, 'POST', { approve: false, comment: c })); }}>Отклонить</button></>}
     </div>))}
     <h3>Календарь {me.role === 'hr' ? 'компании' : 'команды'} (обновляется само)</h3>
-    {d.cal?.map((c: any, i: number) => <div key={i}>{c.name}: {fmt(c)} [{c.status}]</div>)}
+    <Grid rows={d.cal ?? []} />
     {me.role === 'hr' && <><h3>Остатки (HR)</h3>
       {d.hr?.map((u: any) => <div key={u.id}>{u.name} ({u.team}), выход {u.hire_date}: накоплено {u.accrued}, доступно {u.available}{u.needsAttention && ' ⚠ требует внимания'}</div>)}</>}
     <h3>Уведомления</h3>{d.notes?.map((n: any) => <div key={n.id}>{n.text}</div>)}
   </div>);
+}
+
+function Grid({ rows }: { rows: any[] }) {
+  const [m, setM] = useState(() => new Date().toISOString().slice(0, 7));
+  const [y, mo] = m.split('-').map(Number);
+  const n = new Date(y, mo, 0).getDate();
+  const shift = (k: number) => { const d = new Date(y, mo - 1 + k, 1); setM(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`); };
+  const iso = (day: number) => `${m}-${String(day).padStart(2, '0')}`;
+  const names = Array.from(new Set(rows.map((r) => r.name)));
+  const find = (nm: string, day: number) => rows.find((r) => r.name === nm && r.start <= iso(day) && iso(day) <= r.end);
+  return (<div style={{ overflowX: 'auto' }}>
+    <button onClick={() => shift(-1)}>←</button> <b>{m}</b> <button onClick={() => shift(1)}>→</button>
+    <table style={{ borderCollapse: 'collapse', fontSize: 11 }}>
+      <thead><tr><th />{Array.from({ length: n }, (_, i) => <th key={i} style={{ width: 20 }}>{i + 1}</th>)}</tr></thead>
+      <tbody>{names.map((nm) => <tr key={nm}><td style={{ paddingRight: 8, whiteSpace: 'nowrap' }}>{nm}</td>
+        {Array.from({ length: n }, (_, i) => { const c = find(nm, i + 1);
+          return <td key={i} title={c?.status} style={{ height: 18, border: '1px solid #eee', background: c ? (c.status === 'approved' ? '#4caf50' : '#ffb74d') : undefined }} />; })}</tr>)}</tbody>
+    </table><small>зелёный — согласовано, оранжевый — на рассмотрении</small></div>);
 }

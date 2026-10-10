@@ -30,7 +30,13 @@ def init():
     global DSN, pool, _server
     DSN = os.environ.get("DATABASE_URL")
     if not DSN:
-        import pgserver
+        try:  # форк pixeltable-pgserver нужен для Python 3.13+, для 3.9-3.12 подходит и он
+            import pixeltable_pgserver as pgserver
+        except ImportError:
+            try:
+                import pgserver
+            except ImportError as e:
+                raise RuntimeError("Нет пакета pixeltable-pgserver — выполните pip install -r requirements.txt или задайте DATABASE_URL на свой PostgreSQL") from e
         _server = pgserver.get_server(os.environ.get("PGDATA", str(ROOT / ".pgdata")))
         DSN = _server.get_uri()
     pool = ConnectionPool(DSN, kwargs={"row_factory": dict_row}, min_size=1, max_size=10, open=True)
