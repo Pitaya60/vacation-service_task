@@ -10,13 +10,14 @@ const fmt = (p: any) => `${p.start} — ${p.end}`;
 
 export default function App() {
   const [me, setMe] = useState<any>(null), [err, setErr] = useState(''), [tick, setTick] = useState(0);
-  const [d, setD] = useState<any>({}), [on, setOn] = useState(''), [parts, setParts] = useState([{ start: '', end: '' }]);
+  const [health, setHealth] = useState<any>(null), [d, setD] = useState<any>({}), [on, setOn] = useState(''), [parts, setParts] = useState([{ start: '', end: '' }]);
   const [login, setLogin] = useState({ login: 'ivan', password: 'demo' });
   const guard = (f: () => Promise<any>) => f().then(() => setErr('')).catch((e) => setErr(e.message));
 
   const signIn = () => guard(async () => {
     tok = (await call('/login', 'POST', login)).token;
     setMe(await call('/me'));
+    setHealth(await call('/health'));
     new EventSource(`${API}/events?token=${tok}`).onmessage = () => setTick((t) => t + 1);
   });
   useEffect(() => { if (me) guard(async () => setD({
@@ -31,6 +32,7 @@ export default function App() {
 
   return (<div style={{ padding: 20, fontFamily: 'sans-serif', maxWidth: 900 }}>
     <h2>{me.name} ({me.role}, {me.team})</h2><b style={{ color: 'red' }}>{err}</b>
+    {health?.db === 'sqlite' && <div style={{ background: '#fff3cd', padding: 6 }}>⚠ Работает запасная база SQLite: встроенный PostgreSQL не запустился. {health.warning}</div>}
     <h3>Остаток</h3>
     На дату <input type="date" value={on || me.today} onChange={(e) => setOn(e.target.value)} />:
     накоплено {d.bal?.accrued}, зарезервировано {d.bal?.reserved}, <b>доступно {d.bal?.available}</b>
@@ -55,7 +57,7 @@ export default function App() {
     <h3>Календарь {me.role === 'hr' ? 'компании' : 'команды'} (обновляется само)</h3>
     <Grid rows={d.cal ?? []} />
     {me.role === 'hr' && <><h3>Остатки (HR)</h3>
-      {d.hr?.map((u: any) => <div key={u.id}>{u.name} ({u.team}), выход {u.hire_date}: накоплено {u.accrued}, доступно {u.available}{u.needsAttention && ' ⚠ требует внимания'}</div>)}</>}
+      {d.hr?.map((u: any) => <HrRow key={u.id} u={u} save={(hd: string) => guard(() => call(`/users/${u.id}/hire-date`, 'PATCH', { hire_date: hd }))} />)}</>}
     <h3>Уведомления</h3>{d.notes?.map((n: any) => <div key={n.id}>{n.text}</div>)}
   </div>);
 }
@@ -76,4 +78,12 @@ function Grid({ rows }: { rows: any[] }) {
         {Array.from({ length: n }, (_, i) => { const c = find(nm, i + 1);
           return <td key={i} title={c?.status} style={{ height: 18, border: '1px solid #eee', background: c ? (c.status === 'approved' ? '#4caf50' : '#ffb74d') : undefined }} />; })}</tr>)}</tbody>
     </table><small>зелёный — согласовано, оранжевый — на рассмотрении</small></div>);
+}
+
+function HrRow({ u, save }: { u: any; save: (hd: string) => void }) {
+  const [hd, setHd] = useState(u.hire_date);
+  useEffect(() => setHd(u.hire_date), [u.hire_date]);
+  return (<div>{u.name} ({u.team}), выход <input type="date" value={hd} onChange={(e) => setHd(e.target.value)} />{' '}
+    <button disabled={hd === u.hire_date || !hd} onClick={() => save(hd)}>Сохранить</button>
+    : накоплено {u.accrued}, доступно {u.available}{u.needsAttention && ' ⚠ требует внимания'}</div>);
 }

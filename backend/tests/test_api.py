@@ -1,10 +1,12 @@
-"""Интеграционные + e2e тесты: реальный PostgreSQL (встроенный, во временной папке) и реальный HTTP-сервер uvicorn."""
+"""Интеграционные + e2e тесты: реальная БД и реальный HTTP-сервер uvicorn.
+По умолчанию встроенный PostgreSQL во временной папке; `VAC_DB=sqlite pytest` прогоняет те же тесты на запасной SQLite."""
 import os, tempfile, threading, time
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx, pytest, uvicorn
 
 os.environ["PGDATA"] = tempfile.mkdtemp(prefix="vac_pg_")
+os.environ["VAC_SQLITE"] = os.path.join(tempfile.mkdtemp(prefix="vac_sq_"), "t.sqlite3")
 os.environ["REMIND_DAYS"] = "3"
 os.environ["VAC_TODAY"] = "2026-10-10"
 from app import db, main  # noqa: E402
@@ -30,7 +32,7 @@ def server():
 @pytest.fixture(autouse=True)
 def clean():
     os.environ["VAC_TODAY"] = "2026-10-10"
-    db.q("truncate notifications, vacation_parts, vacations restart identity cascade")
+    db.reset_data()
     db.q("update users set hire_date='2025-03-01' where login='ivan'")
 
 
@@ -46,6 +48,10 @@ def call(t, path, m="GET", body=None):
 def notes(t, vid, typ):
     return [n for n in call(t, "/notifications")[1] if n["vacation_id"] == vid and n["type"] == typ]
 
+
+def test_health_reports_db():
+    h = httpx.get(URL + "/health").json()
+    assert h["status"] == "ok" and h["db"] == ("sqlite" if os.environ.get("VAC_DB") == "sqlite" else "postgres-embedded")
 
 def test_wrong_password():
     assert httpx.post(URL + "/login", json={"login": "ivan", "password": "x"}).status_code == 401

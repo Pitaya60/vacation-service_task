@@ -15,9 +15,11 @@
 | T09 | Напоминание ровно одно, обоим | test_reminder_exactly_once_for_both | Pass (сессия Claude) |
 | T10 | Календарь компании только для HR; нет входа — 401 | test_company_calendar_hr_only, test_requires_auth | Pass (сессия Claude) |
 | T11 | Две сессии: действие одной приходит другой по SSE | test_sse_two_sessions | Pass (сессия Claude) |
-| T12 | Свежий запуск на вашем компьютере (`start.ps1`) | вручную | **Не выполнено — заполнить** |
+| T15 | Те же тесты на запасной SQLite (`VAC_DB=sqlite`) | весь test_api.py | Pass: 29 passed (сессия Claude) |
+| T16 | Сбой встроенного PostgreSQL → автоматический переход на SQLite, `/health` показывает `sqlite` и предупреждение, заявка создаётся | test_fallback.py | Pass (сессия Claude, сбой смоделирован неверным `PGDATA`; реальный сбой на Windows этим не воспроизведён) |
+| T12 | Свежий запуск на вашем компьютере (`start.bat`) | вручную | **Не выполнено — заполнить** |
 | T13 | Две вкладки браузера вручную (ivan + boss) | вручную | **Не выполнено — заполнить** |
 | T14 | Перезапуск backend, данные сохранились | вручную (.pgdata) | **Не выполнено — заполнить** |
 
-Результат «Pass (сессия Claude)» получен в среде Claude: Linux, Python 3.12, 27 passed. Для сдачи сохраните свой вывод: `python -m pytest -v > ..\TEST_RESULTS.txt`.
+Результат «Pass (сессия Claude)» получен в среде Claude: Linux, Python 3.12, 29 passed на PostgreSQL 18.4 и 29 passed на SQLite (вывод в `TEST_RESULTS.txt`). Для сдачи сохраните свой вывод: `python -m pytest -v > ..\TEST_RESULTS.txt`.
 Не покрыто тестами: поведение интерфейса, недоступность backend во frontend, ограничения БД напрямую.

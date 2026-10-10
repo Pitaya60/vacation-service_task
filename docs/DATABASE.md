@@ -1,4 +1,6 @@
-# Database Design (PostgreSQL 16)
+# Database Design (PostgreSQL; запасной режим SQLite)
+
+Основная СУБД — PostgreSQL (встроенный через pixeltable-pgserver, в среде Claude это 18.4, или внешний по `DATABASE_URL`). Если встроенный не стартовал, backend использует SQLite с той же схемой: `schema.sql` для SQLite автоматически подменяет `serial` и `timestamptz`; даты читаются как `date`, транзакции делает `db.connection()`. Различие: вместо `LISTEN/NOTIFY` — обратный вызов в процессе.
 
 - `users(id, login unique, pass_hash, name, role in employee|manager|hr, hire_date, team, manager_id → users)`
 - `vacations(id, user_id → users, status in pending|approved|rejected|cancelled, comment, replaces_id → vacations, created_at)`

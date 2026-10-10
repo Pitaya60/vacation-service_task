@@ -32,7 +32,7 @@ def note(type_: str, vid: int, rid: int | None, text: str):
 
 
 def ping():
-    db.q("select pg_notify('cal','x')")
+    db.notify()
 
 
 def remind():
@@ -65,7 +65,11 @@ async def _reminders():
 @asynccontextmanager
 async def lifespan(_):
     await asyncio.to_thread(db.init)
-    threading.Thread(target=_listen, args=(asyncio.get_running_loop(),), daemon=True).start()
+    loop = asyncio.get_running_loop()
+    if db.KIND == "sqlite":
+        db.on_notify = lambda: loop.call_soon_threadsafe(lambda: [s.put_nowait("cal") for s in list(subs)])
+    else:
+        threading.Thread(target=_listen, args=(loop,), daemon=True).start()
     task = asyncio.create_task(_reminders())
     yield
     task.cancel()
@@ -120,7 +124,7 @@ api = APIRouter(prefix="/api/v1")
 
 @api.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "db": db.KIND, "warning": db.warning}
 
 
 @api.post("/login")
@@ -181,7 +185,7 @@ def _parts(b: VacIn):
 
 @api.post("/vacations")
 def create(b: VacIn, u=Depends(me)):
-    with db.pool.connection() as c:
+    with db.connection() as c:
         v = create_vacation(c, u, _parts(b))
     note("new_request", v["id"], u["manager_id"], f"Новая заявка от {u['name']}")
     ping()
@@ -198,7 +202,7 @@ def _own(vid, u):
 @api.post("/vacations/{vid}/cancel")
 def cancel(vid: int, u=Depends(me)):
     v = _own(vid, u)
-    with db.pool.connection() as c:
+    with db.connection() as c:
         cancel_vacation(c, v)
     ping()
     return {"ok": True}
@@ -208,7 +212,7 @@ def cancel(vid: int, u=Depends(me)):
 def reschedule(vid: int, b: VacIn, u=Depends(me)):
     """Перенос = атомарно: отмена старой заявки + новая заявка на согласование."""
     old = _own(vid, u)
-    with db.pool.connection() as c:
+    with db.connection() as c:
         cancel_vacation(c, old)
         v = create_vacation(c, u, _parts(b), old["id"])
     note("new_request", v["id"], u["manager_id"], f"Перенос отпуска: {u['name']}")
@@ -235,12 +239,16 @@ def decision(vid: int, b: DecisionIn, u=Depends(me)):
 
 @api.get("/vacations")
 def vacations(u=Depends(me)):
-    rows = db.q("""select v.id, v.status, v.comment, v.user_id, u.name, u.team,
-        (select json_agg(json_build_object('start',p.start_date,'end',p.end_date) order by p.start_date)
-           from vacation_parts p where p.vacation_id=v.id) parts
+    rows = db.q("""select v.id, v.status, v.comment, v.user_id, u.name, u.team
         from vacations v join users u on u.id=v.user_id where v.user_id=%s or u.manager_id=%s order by v.id desc""",
                 (u["id"], u["id"]))
+    parts: dict[int, list] = {}
+    for p in db.q("""select p.vacation_id vid, p.start_date start, p.end_date "end" from vacation_parts p
+                     join vacations v on v.id=p.vacation_id join users u on u.id=v.user_id
+                     where v.user_id=%s or u.manager_id=%s order by p.start_date""", (u["id"], u["id"])):
+        parts.setdefault(p["vid"], []).append({"start": p["start"], "end": p["end"]})
     for r in rows:
+        r["parts"] = parts.get(r["id"], [])
         if r["user_id"] != u["id"] and r["status"] == "pending":
             r["conflicts"] = db.q("""select distinct u2.name, p2.start_date start, p2.end_date "end" from vacations v2
                 join users u2 on u2.id=v2.user_id join vacation_parts p2 on p2.vacation_id=v2.id
