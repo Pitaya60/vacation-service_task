@@ -37,7 +37,16 @@ def init():
                 import pgserver
             except ImportError as e:
                 raise RuntimeError("Нет пакета pixeltable-pgserver — выполните pip install -r requirements.txt или задайте DATABASE_URL на свой PostgreSQL") from e
-        _server = pgserver.get_server(os.environ.get("PGDATA", str(ROOT / ".pgdata")))
+        try:
+            _server = pgserver.get_server(os.environ.get("PGDATA", str(ROOT / ".pgdata")))
+        except Exception as e:
+            detail = (getattr(e, "stderr", None) or str(e))[-400:]
+            raise RuntimeError(
+                "Не удалось запустить встроенный PostgreSQL: " + detail + "\n"
+                "Если выше есть 0xC0000135 — не хватает системной DLL: установите Microsoft Visual C++ Redistributable x64 "
+                "(https://aka.ms/vs/17/release/vc_redist.x64.exe), удалите папку .pgdata и запустите снова. "
+                "Запасной путь: установите обычный PostgreSQL и задайте переменную DATABASE_URL (см. README)."
+            ) from e
         DSN = _server.get_uri()
     pool = ConnectionPool(DSN, kwargs={"row_factory": dict_row}, min_size=1, max_size=10, open=True)
     with pool.connection() as c:
