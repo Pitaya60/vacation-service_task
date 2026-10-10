@@ -13,6 +13,7 @@ from . import db, rules
 from .rules import plen
 
 subs: set[asyncio.Queue] = set()
+stopping = threading.Event()  # выставляется при остановке backend, чтобы слушатель не переподключался
 SESSION_DAYS = 7
 
 
@@ -49,21 +50,45 @@ def ping():
     db.notify()
 
 
+def approvers(u) -> list[int]:
+    """Кто согласует заявки сотрудника: его руководитель, а если руководителя нет (руководитель отдела, HR) — другие сотрудники HR."""
+    if u["manager_id"]:
+        return [u["manager_id"]]
+    return [x["id"] for x in db.q("select id from users where role='hr' and id<>%s order by id", (u["id"],))]
+
+
+def approvers_of(uid: int) -> list[int]:
+    return approvers(db.q("select id, manager_id from users where id=%s", (uid,))[0])
+
+
+def lock_user(c, u):
+    """PostgreSQL: блокировка строки сотрудника до конца транзакции, чтобы две одновременные заявки не прошли проверку остатка «вслепую».
+    В SQLite транзакции и так выполняются по одной."""
+    if db.KIND != "sqlite":
+        db.q("select id from users where id=%s for update", (u["id"],), c)
+
+
 def remind():
-    """Напоминание за REMIND_DAYS до начала сотруднику и руководителю; идемпотентно."""
+    """Напоминание сотруднику и руководителю, когда до начала отпуска осталось не больше REMIND_DAYS дней.
+    Условие «не больше», а не «ровно»: если backend не работал в нужный день или заявку согласовали позже, напоминание не теряется.
+    Одно на получателя: unique(type, vacation_id, recipient_id) + on conflict do nothing."""
     n = int(os.environ.get("REMIND_DAYS", 3))
-    rows = db.q("""select v.id, v.user_id, u.manager_id from vacations v join users u on u.id=v.user_id
-        where v.status='approved' and (select min(start_date) from vacation_parts where vacation_id=v.id)=%s""",
-                (today() + timedelta(days=n),))
+    t = today()
+    rows = db.q("""select v.id, v.user_id, (select min(start_date) from vacation_parts where vacation_id=v.id) first_day
+        from vacations v where v.status='approved'
+          and (select min(start_date) from vacation_parts where vacation_id=v.id) between %s and %s""",
+                (t, t + timedelta(days=n)))
     for r in rows:
-        for rid in (r["user_id"], r["manager_id"]):
-            note("reminder", r["id"], rid, f"Отпуск начнётся через {n} дн.")
+        left = (date.fromisoformat(str(r["first_day"])) - t).days
+        text = "Отпуск начинается сегодня." if left == 0 else f"Отпуск начнётся через {left} дн."
+        for rid in approvers_of(r["user_id"]) + [r["user_id"]]:
+            note("reminder", r["id"], rid, text)
 
 
 def _listen(loop):
     """Слушает NOTIFY. При обрыве соединения (перезапуск БД, сеть) переподключается:
     без этого календари молча переставали бы обновляться до перезапуска backend."""
-    while True:
+    while not stopping.is_set():
         try:
             with psycopg.connect(db.DSN, autocommit=True) as c:
                 c.execute("listen cal")
@@ -72,6 +97,8 @@ def _listen(loop):
                 for _ in c.notifies():
                     loop.call_soon_threadsafe(lambda: [s.put_nowait("cal") for s in list(subs)])
         except Exception as e:
+            if stopping.is_set():
+                break
             print("[listen] соединение потеряно, повтор через 2 с:", e)
         time.sleep(2)
 
@@ -95,6 +122,7 @@ async def lifespan(_):
         threading.Thread(target=_listen, args=(loop,), daemon=True).start()
     task = asyncio.create_task(_reminders())
     yield
+    stopping.set()
     task.cancel()
 
 
@@ -187,6 +215,8 @@ def balance(on_date: date | None = Query(None, alias="date"), u=Depends(me)):
 
 
 def create_vacation(c, u, parts, replaces=None):
+    if not approvers(u):
+        raise HTTPException(422, "Некому согласовать заявку: у вас не назначен руководитель и нет других сотрудников HR.")
     existing = user_parts(u["id"], c)
     err = (rules.validate_parts(parts, today()) or rules.check_balance(u["hire_date"], existing, parts)
            or rules.check_year_limit(existing, parts))
@@ -199,16 +229,18 @@ def create_vacation(c, u, parts, replaces=None):
 
 
 def cancel_vacation(c, v):
-    """До начала дни возвращаются целиком; после начала остаётся использованное (по сегодня включительно)."""
+    """До начала дни возвращаются целиком; после начала остаётся использованное (по сегодня включительно).
+    Статус меняется атомарным update: два одновременных запроса не отменят и не перенесут заявку дважды."""
     t = today()
     if v["status"] in ("cancelled", "rejected"):
         raise HTTPException(409, "Заявка уже неактивна")
     ps = db.q("select * from vacation_parts where vacation_id=%s", (v["id"],), c)
     if all(p["end_date"] < t for p in ps):
         raise HTTPException(409, "Отпуск уже закончился")
+    if not db.q("update vacations set status='cancelled' where id=%s and status in ('pending','approved') returning id", (v["id"],), c):
+        raise HTTPException(409, "Заявка уже неактивна")
     db.q("delete from vacation_parts where vacation_id=%s and start_date>%s", (v["id"], t), c)
     db.q("update vacation_parts set end_date=%s where vacation_id=%s and end_date>%s", (t, v["id"], t), c)
-    db.q("update vacations set status='cancelled' where id=%s", (v["id"],), c)
 
 
 def _parts(b: VacIn):
@@ -218,8 +250,10 @@ def _parts(b: VacIn):
 @api.post("/vacations")
 def create(b: VacIn, u=Depends(me)):
     with db.connection() as c:
+        lock_user(c, u)
         v = create_vacation(c, u, _parts(b))
-    note("new_request", v["id"], u["manager_id"], f"Новая заявка от {u['name']}")
+    for rid in approvers(u):
+        note("new_request", v["id"], rid, f"Новая заявка от {u['name']}")
     ping()
     return v
 
@@ -245,9 +279,11 @@ def reschedule(vid: int, b: VacIn, u=Depends(me)):
     """Перенос = атомарно: отмена старой заявки + новая заявка на согласование."""
     old = _own(vid, u)
     with db.connection() as c:
+        lock_user(c, u)
         cancel_vacation(c, old)
         v = create_vacation(c, u, _parts(b), old["id"])
-    note("new_request", v["id"], u["manager_id"], f"Перенос отпуска: {u['name']}")
+    for rid in approvers(u):
+        note("new_request", v["id"], rid, f"Перенос отпуска: {u['name']}")
     ping()
     return v
 
@@ -255,7 +291,7 @@ def reschedule(vid: int, b: VacIn, u=Depends(me)):
 @api.post("/vacations/{vid}/decision")
 def decision(vid: int, b: DecisionIn, u=Depends(me)):
     r = db.q("select v.*, u.manager_id from vacations v join users u on u.id=v.user_id where v.id=%s", (vid,))
-    if not r or r[0]["manager_id"] != u["id"]:
+    if not r or u["id"] not in approvers({"id": r[0]["user_id"], "manager_id": r[0]["manager_id"]}):
         raise HTTPException(403, "Это не ваш сотрудник")
     v = r[0]
     if not b.approve and not (b.comment or "").strip():
@@ -271,13 +307,15 @@ def decision(vid: int, b: DecisionIn, u=Depends(me)):
 
 @api.get("/vacations")
 def vacations(u=Depends(me)):
-    rows = db.q("""select v.id, v.status, v.comment, v.user_id, u.name, u.team
-        from vacations v join users u on u.id=v.user_id where v.user_id=%s or u.manager_id=%s order by v.id desc""",
-                (u["id"], u["id"]))
+    """Свои заявки и заявки, которые согласует пользователь: сотрудников команды; для HR ещё и тех, у кого нет руководителя."""
+    scope = "(v.user_id=%s or u.manager_id=%s or (%s and u.manager_id is null and u.id<>%s))"
+    args = (u["id"], u["id"], u["role"] == "hr", u["id"])
+    rows = db.q(f"""select v.id, v.status, v.comment, v.user_id, u.name, u.team
+        from vacations v join users u on u.id=v.user_id where {scope} order by v.id desc""", args)
     parts: dict[int, list] = {}
-    for p in db.q("""select p.vacation_id vid, p.start_date start, p.end_date "end" from vacation_parts p
+    for p in db.q(f"""select p.vacation_id vid, p.start_date start, p.end_date "end" from vacation_parts p
                      join vacations v on v.id=p.vacation_id join users u on u.id=v.user_id
-                     where v.user_id=%s or u.manager_id=%s order by p.start_date""", (u["id"], u["id"])):
+                     where {scope} order by p.start_date""", args):
         parts.setdefault(p["vid"], []).append({"start": p["start"], "end": p["end"]})
     for r in rows:
         r["parts"] = parts.get(r["id"], [])

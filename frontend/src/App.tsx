@@ -97,12 +97,12 @@ export default function App() {
   const tabs = {
     employee: [['me', 'Мой отпуск'], ['team', 'Календарь команды']],
     manager: [['appr', 'Согласование'], ['team', 'Календарь команды'], ['me', 'Мой отпуск']],
-    hr: [['hr', 'Сотрудники и остатки'], ['company', 'Календарь компании'], ['me', 'Мой отпуск']],
+    hr: [['hr', 'Сотрудники и остатки'], ['appr', 'Согласование'], ['company', 'Календарь компании'], ['me', 'Мой отпуск']],
   }[me.role];
 
   const send = async (parts: Part[]) => {
-    if (resched) { await call(`/vacations/${resched.id}/reschedule`, 'POST', { parts }); setResched(null); say('ok', 'Перенос отправлен руководителю на согласование.'); }
-    else { await call('/vacations', 'POST', { parts }); say('ok', 'Заявка отправлена руководителю.'); }
+    if (resched) { await call(`/vacations/${resched.id}/reschedule`, 'POST', { parts }); setResched(null); say('ok', 'Перенос отправлен на согласование.'); }
+    else { await call('/vacations', 'POST', { parts }); say('ok', 'Заявка отправлена на согласование.'); }
     refresh();
   };
   const cancel = async (v: Vac) => {

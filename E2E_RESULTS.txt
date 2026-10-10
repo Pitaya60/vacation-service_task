@@ -1,3 +1,5 @@
+# ВНИМАНИЕ: этот вывод получен на версии frontend ДО правок D19-D21 (вкладка «Согласование» у HR, тексты после отправки заявки).
+# После правок тесты интерфейса не перезапускались (в среде Claude нет Chromium). Перезапустите: e2e/README.md.
 # Сквозные тесты интерфейса (Chromium, Playwright) — среда Claude (Linux). НЕ Windows пользователя.
 # Backend на SQLite, frontend: vite preview; прогон выполнен дважды подряд на одной БД.
 e2e/test_ui.py::test_rule_error_shows_inside_the_form PASSED             [ 20%]
